@@ -1,0 +1,7 @@
+{
+  "message": {
+    "data": "eyJJbmNpZGVudCBOdW1iZXIiOiAiSU5DMjM1NjgiLCAiUGFydCBOdW1iZXIiOiAiUFJPRCBOb3p6bGUiLCAic3VibWl0dGVyIjogImFsaWNlQGNvbXBhbnkuY29tIiwgImNhdGVnb3J5IjogIkRyaWxsaW5nIiwgImRlc2NyaXB0aW9uIjogIk5venpsZSBmb3IgZHJpbGxpbmciLCAiZGF0ZSI6ICIyMDI2LTA2LTA2IiwgIlBhcnQgUmVwbGFjZW1lbnQgQ29zdCI6IDEyMH0=",
+    "messageId": "12345"
+  },
+  "subscription": "projects/my-project/subscriptions/ambient-test-session"
+}
