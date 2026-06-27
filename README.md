@@ -21,22 +21,22 @@ make playground        # opens UI at http://127.0.0.1:8080/dev-ui/
 
 ```mermaid
 graph TD
-    Start((Start)) --> Extract[Extract Incident]
-    Extract --> Security[Security Checkpoint\nPII Scrub & Injection Detect]
+    Start((Start)) --> Extract["Extract Incident"]
+    Extract --> Security["Security Checkpoint<br>PII Scrub & Injection Detect"]
     
-    Security -->|auto_approve| AutoApp[Auto Approve]
-    Security -->|llm_review| LLM[LLM Risk Assessor]
-    Security -->|human_review| Human[Human Review HITL ✋]
+    Security -->|auto_approve| AutoApp["Auto Approve"]
+    Security -->|llm_review| LLM["LLM Risk Assessor"]
+    Security -->|human_review| Human["Human Review HITL ✋"]
     
     LLM --> Human
     
-    AutoApp -->|approve| CreateSO[Create Service Order]
+    AutoApp -->|approve| CreateSO["Create Service Order"]
     Human -->|approve| CreateSO
-    Human -->|reject| RejectSO[Reject Order]
+    Human -->|reject| RejectSO["Reject Order"]
     
-    subgraph MCP Server
+    subgraph MCP_Server [MCP Server]
       direction TB
-      MCP[MCP Server]
+      MCP["MCP Server"]
     end
     
     LLM -.->|tools| MCP
