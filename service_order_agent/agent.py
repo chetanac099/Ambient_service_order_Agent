@@ -19,13 +19,41 @@ from .schemas import IncidentDetails, RiskAssessment, ServiceOrderResult
 def extract_incident(ctx: Context, node_input: Any) -> Event:
     """Parses JSON event (supports base64 decoded 'data' key or plain dict)."""
     data = node_input
+    # Handle the case where ADK passes a resume function_response to the START node
+    # Use extremely robust duck typing and string representation checking
+    node_str = str(node_input)
+    is_content_obj = type(node_input).__name__ == "Content" or "Content(" in node_str
     
-    if isinstance(node_input, types.Content) and node_input.parts:
-        try:
-            text_val = node_input.parts[0].text
-            data = json.loads(text_val)
-            node_input = data
-        except Exception:
+    if is_content_obj:
+        if "function_response=" in node_str or "function_call=" in node_str:
+            if "approve" in node_str.lower() and "reject" not in node_str.lower():
+                ctx.state["auto_decision"] = "approve"
+            elif "reject" in node_str.lower():
+                ctx.state["auto_decision"] = "reject"
+                
+            if "incident" in ctx.state:
+                return Event(output=IncidentDetails.model_validate(ctx.state["incident"]))
+            else:
+                raise ValueError("Received function response but no incident in state.")
+                
+        parts = getattr(node_input, "parts", []) if hasattr(node_input, "parts") else []
+        if parts:
+            part = parts[0]
+            text_val = getattr(part, "text", None)
+            if text_val:
+                try:
+                    data = json.loads(text_val)
+                    node_input = data
+                except Exception:
+                    # If it's a resume but sent as text instead of function response
+                    if "incident" in ctx.state and text_val.strip().lower() in ["approve", "reject"]:
+                        ctx.state["auto_decision"] = text_val.strip().lower()
+                        return Event(output=IncidentDetails.model_validate(ctx.state["incident"]))
+                    raise ValueError(f"Expected JSON input for incident extraction, got: {text_val}")
+            else:
+                raise ValueError("Content input lacks text or function_response.")
+        else:
+            # Fallback if we couldn't parse parts
             pass
             
     if isinstance(node_input, dict) and 'data' in node_input:
@@ -50,12 +78,24 @@ def extract_incident(ctx: Context, node_input: Any) -> Event:
         except Exception:
             pass
 
+    # Extreme fallback: if data is somehow STILL a Content object, DO NOT PASS to Pydantic!
+    if type(data).__name__ == "Content" or "Content(" in str(data):
+        if "incident" in ctx.state:
+            return Event(output=IncidentDetails.model_validate(ctx.state["incident"]))
+        else:
+            raise ValueError("Received Content object but no incident in state.")
+            
     # Parse and validate using Pydantic schema
     incident = IncidentDetails.model_validate(data)
     
     # Save the incident in state so it's accessible by downstream nodes
     ctx.state["incident"] = incident.model_dump()
-
+    
+    # Reset prompted flag for new invocations to ensure human_review pauses
+    prompted_key = f"prompted_{incident.incident_number}"
+    if prompted_key in ctx.state:
+        del ctx.state[prompted_key]
+        
     return Event(output=incident)
 
 
@@ -113,20 +153,60 @@ llm_review = LlmAgent(
 @node(rerun_on_resume=True)
 async def human_review(ctx: Context, node_input: RiskAssessment) -> RequestInput | Event:
     """Pauses workflow to request human review based on risk assessment."""
-    if not ctx.resume_inputs:
+    incident_num = ctx.state["incident"]["incident_number"]
+    prompted_key = f"prompted_{incident_num}"
+    
+    # Check if we have an auto_decision from a resumed START node
+    if "auto_decision" in ctx.state:
+        decision = ctx.state["auto_decision"]
+        del ctx.state["auto_decision"]
+        
+        if decision == "approve":
+            return Event(output={"decision": "approved", "incident": ctx.state["incident"]}, route="approve")
+        else:
+            return Event(output={"decision": "rejected", "incident": ctx.state["incident"]}, route="reject")
+
+    if not ctx.state.get(prompted_key):
+        ctx.state[prompted_key] = True
         msg = (f"Please review this service order.\n"
                f"Risk factors: {node_input.risk_factors}\n"
                f"Recommendation: {node_input.recommendation}\n"
                f"Reply with 'approve' or 'reject'.")
-        yield RequestInput(interrupt_id="approval", message=msg)
-        return
+        return RequestInput(interrupt_id="approval", message=msg)
         
-    decision = str(ctx.resume_inputs.get("approval", "")).strip().lower()
+    approval_input = ctx.resume_inputs.get("approval", "")
+    
+    # Safeguard: if user pasted a new JSON payload instead of replying
+    approval_str = str(approval_input).strip()
+    if "incident_number" in approval_str and "{" in approval_str:
+        msg = (f"Error: Expected 'approve' or 'reject', but received a JSON payload.\n"
+               f"Please type 'approve' or 'reject' to finish the current order.\n"
+               f"To start a new test case, please reset the playground session first.")
+        return RequestInput(interrupt_id="approval", message=msg)
+    
+    if hasattr(approval_input, "parts") and getattr(approval_input, "parts", None):
+        decision = approval_input.parts[0].text.strip().lower()
+    elif isinstance(approval_input, dict):
+        # The UI or CLI might pass a dictionary like {"approval": "approve"}
+        # If it's a dict and has the 'approval' key, extract that.
+        val = approval_input.get("approval")
+        if val is None:
+            # Fallback to the first value in the dict
+            val = list(approval_input.values())[0] if approval_input else ""
+        decision = str(val).strip().lower()
+    else:
+        decision = str(approval_input).strip().lower()
+        
+    # Extra safety: check if the string contains the keyword rather than strict equality
+    if "approve" in decision and "reject" not in decision:
+        decision = "approve"
+    elif "reject" in decision:
+        decision = "reject"
     
     if decision == "approve":
-        yield Event(output={"decision": "approved", "incident": ctx.state["incident"]}, route="approve")
+        return Event(output={"decision": "approved", "incident": ctx.state["incident"]}, route="approve")
     else:
-        yield Event(output={"decision": "rejected", "incident": ctx.state["incident"]}, route="reject")
+        return Event(output={"decision": "rejected", "incident": ctx.state["incident"]}, route="reject")
 
 
 @node
